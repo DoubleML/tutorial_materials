@@ -3,8 +3,7 @@ title: "R: Estimation of Price Elasticities with Double/Debiased Machine Learnin
 output: html_document
 ---
 
-
-![](figures/demand.png)
+<img src="figures/demand.png" alt="An illustration of demand estimation. On the left hand side two hands are displayed on top of each other. Between the hands there are two arrows showing up and down. On the right hand side, there is a price tag with a dollar sign attached to a circular graph." style="width: 400px;"/>
 
 In this example, we will demonstrate the use of the [DoubleML](https://docs.doubleml.org/stable/index.html) package in a real-data industry example: Estimation of price elasticity of demand. This notebook is based on a [blogpost by Lars Roemheld (Roemheld, 2021)](https://towardsdatascience.com/causal-inference-example-elasticity-de4a3e2e621b) with code and preprocessed data being available from [GitHub](https://github.com/larsroemheld/causalinf_ex_elasticity). The original data file is made available as a public domain (CC0 1.0 Universal) data set and shared on [kaggle](https://www.kaggle.com/vijayuv/onlineretail). It contains data on sales from an online retailer in the period of December 2010 until December 2011.
 
