@@ -1,5 +1,5 @@
 ---
-title: "R: A/b Testing with DoubleML"
+title: "R: A/B Testing with DoubleML"
 output: html_document
 ---
 
@@ -63,7 +63,7 @@ dim(df)
 ```
 
 ```{r}
-head(df)
+head(df[,1:10])
 ```
 
 We see that the data set consists of 1000 observations (= website visitors) and 202 variables:
