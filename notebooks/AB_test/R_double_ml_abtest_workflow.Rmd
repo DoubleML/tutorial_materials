@@ -1,0 +1,371 @@
+---
+title: "R: A/b Testing with DoubleML"
+output: html_document
+---
+
+
+<img src="figures/ab_testing.png" alt="An illustration of A/B testing." style="width: 400px;"/>
+
+In this notebook, we demontrate exemplarily how the [DoubleML](https://docs.doubleml.org/stable/index.html) package can be used to estimate the causal effect of seeing a new ad design on customers' purchases in a webshop. We base the estimation steps of our analysis according to the [DoubleML workflow](https://docs.doubleml.org/stable/workflow/workflow.html).
+
+
+## 0. Problem Formulation: A/B Testing
+
+
+### The A/B Testing Scenario
+
+Let's consider the following stylized scenario. The manager of a webshop performs an A/B test to estimate the effect a new ad design $A$ has on customers' purchases (in $100\$$), $Y$, on average. This effect is called the **A**verage **T**reatment **E**ffect (**ATE**). The treatment is assigned randomly conditional on the visitors' characteristics, which we call $V$. Such characteristics could be collected from a customer's shoppers account, for example. These might include the number of previous purchases, time since the last purchase, length of stay on a page as well as whether a customer has a rewards card, among other characteristics. <br> 
+
+In the following, we use a **D**irected **A**cyclical **G**raph (DAG) to illustrate our assumptions on the causal structure of the scenario. As not only the outcome, but also the treatment is dependent on the individual characteristics, there are arrows going from $V$ to both $A$ and $Y$. In our example, we also assume that the treatment $A$ is a direct cause of the customers' purchases $Y$.
+
+
+![Scenario illustration with a DAG](figures/DAG.svg)
+
+
+Let's assume the conditional randomization has been conducted properly, such that a tidy data set has been collected. Now, a data scientist wants to evaluate whether the new ad design causally affected the sales, by using the [DoubleML](https://docs.doubleml.org/stable/index.html) package.
+
+### Why control for individual characteristics?
+
+Before we start the case study, let us briefly address the question why we need to include individual characteristics in our analysis at all. There are mainly two reasons why we want to control for observable characteristics. First, so-called confounders, i.e., variables that have a causal effect on both the treatment variable and the outcome variable, possibly create a bias in our estimate. In order to uncover the true causal effect of the treatment, it is necessary that our causal framework takes all confounding variables into account. Otherwise, the average causal effect of the treatment on the outcome is not identified. A second reason to include individual characteristics is efficiency. The more variation can be explained within our causal framework, the more precise will be the resulting estimate. In practical terms, greater efficiency leads to tighter confidence intervals and smaller standard errors and p-values. This might help to improve the power of A/B tests even if the treatment variable is unconditionally assigned to individuals.
+
+### Why use machine learning to analyze A/B tests?
+
+ML methods have turned out to be very flexible in terms of modeling complex relationships of explanatory variables and dependent variables and, thus, have exhibited a great predictive performance in many applications. In the double machine learning approach ([Chernozhukov et al. (2018)](https://arxiv.org/abs/1608.00060)), ML methods are used for modelling so-called nuisance functions. In terms of the A/B case study considered here, ML tools can be used to flexibly control for confounding variables. For example, a linear parametric specification as in a standard linear regression model might not be correct and, hence, not sufficient to account for the underlying confounding. Moreover, by using powerful ML techniques, the causal model will likely be able to explain a greater share of the total variation and, hence, lead to more precise estimation.
+
+## 1. Data-Backend
+
+### The data set
+
+As an illustrative example we use a data set from the [ACIC 2019 Data Challenge](https://sites.google.com/view/acic2019datachallenge/data-challenge). In this challenge, a great number of data sets have been generated in a way that they mimic distributional relationships that are found in many economic real data applications. Although the data have not been generated explicitly to address an A/B testing case study, they are well-suited for demonstration purposes. We will focus on one of the many different data genereting processes (DGP) that we picked at random, in this particualar case a data set called `high42`. An advantage of using the synthetic [ACIC 2019 data](https://sites.google.com/view/acic2019datachallenge/data-challenge) is that we know the true average treatment effect which is 0.8 in our data set.
+
+```{r}
+# Load required packages for this tutorial
+library(DoubleML)
+library(mlr3)
+library(mlr3learners)
+library(data.table)
+library(ggplot2)
+
+# suppress messages during fitting
+lgr::get_logger("mlr3")$set_threshold("warn")
+```
+
+First we load the data.
+
+```{r}
+# Load data set from url (internet connection required)
+url = "https://raw.githubusercontent.com/DoubleML/doubleml-docs/master/doc/examples/data/high42.CSV"
+df = fread(url)
+```
+
+```{r}
+dim(df)
+```
+
+```{r}
+head(df)
+```
+
+We see that the data set consists of 1000 observations (= website visitors) and 202 variables:
+
+* `Y`: A customer's purchases (in $100\$$)
+* `A`: Binary treatment variable with a value 1 indicating that a customer has been exposed to the new ad design (and value 0 otherwise).
+* `V1`,..., `V200`: The remaining 200 columns $V$ represent individual characteristics of the customers (=confounders).
+
+To start our analysis, we initialize the data backend from the previously loaded data set, i.e., we create a new instance of a [DoubleMLData](https://docs.doubleml.org/stable/guide/data_backend.html) object. During initialization, we specify the roles of the variables in the data set, i.e., in our example the outcome variable $Y$ via the parameter `y_col`, the treatment variable $A$ via `d_cols` and the confounding variables $V$ via `x_cols`.
+
+```{r}
+# Specify explanatory variables for data-backend
+features_base = colnames(df)[grep("V", colnames(df))]
+
+# TODO: Initialize DoubleMLData (data-backend of DoubleML)
+```
+
+We can print the data-backend to see the variables, which we have assigned as outcome, treatment and controls.
+
+```{r}
+# TODO: print data backend
+```
+
+## 2. Causal Model
+
+The inference problem is to determine the causal effect of seeing the new ad design $A$ on customers' purchases $Y$ once we control for individual characteristics $V$. In our example, we are interested in the average treatment effect. Basically, there are two causal models available in [DoubleML](https://docs.doubleml.org/stable/) that can be used to estimate the ATE.
+
+The so-called **interactive regression model** (IRM) called by [DoubleMLIRM](https://docs.doubleml.org/stable/guide/models.html#interactive-regression-model-irm) is a flexible (nonparametric) model to estimate this causal quantity. The model does not impose functional form restrictions on the underlying regression relationships, for example, linearity or additivity as in a standard linear regression model. This means that the model hosts heterogeneous treatment effects, i.e., account for variation in the effect of the new ad design across customers. Moreover, it is possible to also estimate other causal parameters with the IRM, for example, the average treatment effect on the treated (= those customers who have been exposed to the new ad), which might be of interest too.
+
+### 2.1. Interactive regression model (IRM)
+
+We briefly introduce the [interactive regression model](https://docs.doubleml.org/stable/guide/models.html#interactive-regression-model-irm) where the main regression relationship of interest is provided by
+
+$$Y = g_0(A, V) + U_1, \quad E(U_1 | V, A) = 0,$$
+
+where the treatment variable is binary, $A \in \lbrace 0,1 \rbrace$. We consider estimation of the average treatment effect (ATE):
+
+$$\theta_0 = \mathbb{E}[g_0(1, V) - g_0(0,V)],$$
+
+when treatment effects are heterogeneous. In order to be able to use ML methods, the estimation framework generally requires a property called "double robustness" or "Neyman orthogonality". In the IRM, double robustness can be achieved by including the first-stage estimation
+
+$$A = m_0(V) + U_2, \quad E(U_2| V) = 0,$$
+
+which amounts to estimation of the propensity score, i.e., the probability that a customer is exposed to the treatment provided her observed characteristics. Both predictions are then combined in [the doubly robust score for the average treatment effect](https://docs.doubleml.org/stable/guide/scores.html#interactive-regression-model-irm) which is given by
+
+$$\psi(W; \theta, \eta) := g(1,V) - g(0,V) + \frac{A (Y - g(1,V))}{m(V)} - \frac{(1 - A)(Y - g(0,V))}{1 - m(V)} - \theta.$$
+
+### 2.2. Naive Approach: Unconditional estimate of ATE
+
+As a naive estimate, we could calculate the unconditional average treatment effect. In other words, we simply take the difference between $Y$ observed for the customers who have been exposed to the treatment $(A=1)$ and those who haven't been exposed $(A=0)$.
+
+Since the unconditional ATE does not account for the confounding variables, it will generally not correspond to the true ATE (only in the case of unconditionally random treatment assignment, the unconditional ATE will correspond to the true ATE). For example, if the unconditional ATE estimate is greater than the actual ATE, the manager would erroneously overinterpret the effect of the new ad design and probably make misleading decisions for the marketing budget in the future.
+
+```{r}
+# TODO: Calculate unconditional average treatment effect
+```
+
+## 3. ML Methods
+
+In this step, we define the learners that will be used for estimation of the nuisance functions later.  
+
+### 3.1. Benchmark using linear and logistic regression
+
+Let us first start with a benchmark model that is based on (unpenalized) linear and logistic regression. Hence, we estimate the functions $g_0(A,V)$ using a linear regression model and $m_0(V)$ by using an (unpenalized) logistic regression. In both cases, we include all available characteristics $V$. We will later compare the performance of this model to that using more advanced ML methods.
+
+```{r}
+# TODO: Initialize Linear and Logistic Regression learners
+```
+
+### 3.2. Instantiate one or several ML learners of your choice
+
+```{r}
+# TODO: Initialize one ML learner of your choice
+```
+
+```{r}
+# TODO: Initialize a second ML learner of your choice
+#      (proceed as long as you like)
+```
+
+## 4. DML Specifications
+
+At this stage, we instantiate a causal model object of the class [DoubleMLIRM](https://docs.doubleml.org/stable/guide/models.html#interactive-regression-model-irm). Provide the learners via parameters `ml_g` and `ml_m`. You can either stick with the default setting or change the parameters. The documentation for the [DoubleMLIRM](https://docs.doubleml.org/r/stable/reference/DoubleMLIRM.html) class is available [here](https://docs.doubleml.org/r/stable/reference/DoubleMLIRM.html). Also have a look at the documentation of the abstract base class [DoubleML](https://docs.doubleml.org/r/stable/reference/DoubleML.html)
+
+**Hint**: Use `set.seed()` to set a random seed prior to your initialization. This makes the sample splits of the different models comparable. Also try to use the same DML specifications in all models to attain some comparability.
+
+### 4.1. Linear and logistic benchmark model
+
+```{r}
+# TODO: Initialize benchmark DoubleMLIRM model
+```
+
+### 4.2. ML Model of your choice
+
+```{r}
+# TODO: Initialize a DoubleMLIRM model using the ML learners of your choice
+```
+
+### 4.3. - 4.X. ML Model of your choice
+
+Proceed with the models using the other ML learners.
+
+```{r}
+# TODO: Initialize a DoubleMLIRM model using the ML learners of your choice
+```
+
+### 5. Estimation
+
+### 5.1. Estimation for the Benchmark IRM
+
+```{r}
+# TODO: Fit benchmark DoubleMLIRM model using the fit() method
+```
+
+### 5.2. Estimation Diagnostics for the Benchmark IRM
+
+#### 5.2.1. Assess the Predictive Performance in the benchmark IRM
+
+To evaluate the different models we can compare how well the employed estimators fit the nuisance functions $g_0(\cdot)$ and $m_0(\cdot)$. Use the following helper function to compare the predictive performance of your models.
+
+```{r}
+# A function to calculate prediction accuracy values for every repetition
+# of a Double Machine Learning model using IRM, DoubleMLIRM
+pred_acc_irm = function(obj, prop) {
+  # obj : DoubleML::DoubleMLIRM
+  # The IRM Double Machine Learning model
+  # prop : logical
+  # Indication if RMSE values have to be computed for main regression or
+  # log loss values for propensity score  
+  
+  if (obj$data$n_treat > 1) {
+    stop("Number of treatment variable is > 1. Helper function for nuisance accuracy is only implemented for 1 treatment variable.")
+  }
+  h = obj$data$n_obs
+  w = obj$n_rep
+  
+  y = obj$data$data_model[[obj$data$y_col]]
+  d = obj$data$data_model[[obj$data$treat_col]]
+  g0 = matrix(obj$predictions[['ml_g0']][,,1], ncol = w)
+  g1 = matrix(obj$predictions[['ml_g1']][,,1], ncol = w)
+  m = matrix(obj$predictions[['ml_m']][,,1], ncol = w)
+  
+  if (!all(unique(d) %in% c(0,1))) {
+    stop("Treatment must be a binary variable.")
+  }
+
+  if (!prop) {
+    export_pred = d*g1 + (1-d) * g0
+    # Calculate MSE for every repetition
+    pred_acc = apply(export_pred, 2,
+                     function(x) mlr3measures::rmse(y,x))
+  } else {
+    pred_acc = rep(NA, w)
+      for (j in seq_len(w)) {
+          class_probs = matrix(c(1-m[,j],m[,j]), ncol = 2)
+          colnames(class_probs) = c("0", "1")
+          pred_acc[j] = mlr3measures::logloss(as.factor(d),class_probs)
+    }
+  }
+  return(pred_acc)
+}
+```
+
+```{r}
+# TODO: Evaluate the predictive performance for `ml_g` and `ml_m` using the
+#       helper function `pred_acc_irm()`.
+```
+
+#### Optional: 5.2.2. Evaluation of Propensity Score Estimates in the Benchmark IRM
+
+The propensity score $m_0(A,V)$ plays an important role in the [score of the IRM model](https://docs.doubleml.org/stable/guide/scores.html#interactive-regression-model-irm). Try to summarize the estimates for $m_0(A,V)$ using some descriptive statistics or visualization. You can use the following helper function to generate a histogram for the propensity score.
+
+```{r}
+# Function to plot propensity scores
+rep_propscore_plot = function(obj) {
+  # obj : doubleml
+  # The Double Machine Learning model
+  if (obj$data$n_treat > 1) {
+    stop("Number of treatment variable is > 1. Helper function for nuisance accuracy is only implemented for 1 treatment variable.")
+  }
+  m = data.table(obj$predictions[['ml_m']][,,1])
+  colnames(m) = paste("Repetition", 1:obj$n_rep)
+  m = melt(m,
+           measure.vars = names(m))
+  
+  hist_ps = ggplot(m) +
+    geom_histogram(aes(y = ..count.., x = value),
+                   bins = 25, fill = "darkblue",
+                   col= "darkblue", alpha = 0.5) + 
+    xlim(c(0,1)) + theme_minimal() + 
+    facet_grid(. ~ variable )
+  return(hist_ps)
+}
+```
+
+```{r}
+# (TODO): Summarize the propensity score estimates
+```
+
+### 5.3. Estimation for ML Model
+
+```{r}
+# TODO: Fit the ML DoubleMLIRM model using the fit() method
+```
+
+### 5.3. Estimation Diagnostics for the IRM using ML Methods
+
+#### 5.3.1. Assess the Predictive Performance in the IRM using ML methods
+
+```{r}
+# TODO: Evaluate the predictive performance for `ml_g` and `ml_m` using the
+#       helper function `pred_acc_irm()`.
+```
+
+#### Optional: 5.3.2. Evaluation of Propensity Score Estimates in the Benchmark IRM
+
+```{r}
+# (TODO): Summarize the propensity score estimates
+```
+
+### 5.4. - 5.X. ML Model of your choice
+
+Proceed with the models using the other ML learners.
+
+### 5.X+1 Summarize your Results on the Quality of Estimation 
+
+Provide a brief summary of your estimation results, for example by creating a table or figure.
+
+```{r}
+# TODO: Summarize the results on the nuisance estimation in a table or figure
+```
+
+## 6. Inference
+
+Summarize your results on the **coefficient estimate** for $\theta_0$ as well as the **standard errors** and / or **confidence intervals**, respectively. You can create a table or a figure illustrating your findings.
+
+Try to answer the following questions: 
+
+* Can you reject the $H_0$ that the new add ($A$) has no effect on sales ($Y$) at common significance levels?
+* How close is your estimate to the true value of $\theta_0=0.8$?
+* Do the confidence intervals cover the true effect $\theta_0 = 0.8$?
+
+**Solution:**
+
+* In all ML based models, the null hypothesis $H_0: \theta_0 = 0$ can be rejected at all common significance levels
+* The linear/logistic benchmarmk model seems to suffer from numerical instabilities/overfitting; the results in terms of the quality of fit for the nuisance functions are worse than for the ML methods leading to imprecise and instable estimation
+* The bias of the benchmark model is quite substantial, the results for the ML-based models are closer to the true effect of $\theta_0=0.8$. The associated confidence intervals do cover the true effect $\theta_0=0.8$.
+
+### 6.1. Inference for the benchmark IRM
+
+```{r}
+## TODO: After calling fit(), access the coefficient parameter,
+##      the standard error and confidence interva by calling the method
+##      `summary()` and `confint().
+```
+
+### 6.2. Inference for the IRM using ML methods
+
+```{r}
+## TODO: After calling fit(), access the coefficient parameter,
+##      the standard error and confidence interval by calling the methods
+##      `summary()` and `confint()`.
+```
+
+### 6.3. - 6.X. ML Model of your choice
+
+Proceed with the models using the other ML learners.
+
+_____________________________________________________________________
+
+## Variation / Scope for Extensions
+
+### Variation 1: Partially linear regression
+
+
+As an alternative to the (nonparametric) IRM model, the [DoubleML](https://docs.doubleml.org/stable/index.html) package also includes the [partial linear regression (PLR)](https://docs.doubleml.org/stable/guide/models.html#partially-linear-regression-model-plr) model, which assumes the population regression has a linear and additive structure. Although in reality, we never know if this structure really holds for the underlying data generating process, we can apply this model and see how the estimates compare to those from the IRM.
+
+We can estimate the nuisance functions $g_0$ and $m_0$ in the following PLR model:
+
+\begin{eqnarray}
+& Y = A\theta_0 + g_0(V) + \zeta, &\quad E[\zeta \mid A,V]= 0,\\
+& A = m_0(V) +  U_3, &\quad E[U_3 \mid V] = 0.
+\end{eqnarray}
+
+### Variation 2: Employ an alternative learner
+
+
+Instead of the learners used above, we can experiment with different learners that are available from the `mlr3` ecosystem. A searchable list of all implemented learners is available [here](https://mlr3extralearners.mlr-org.com/articles/learners/list_learners.html).
+
+### Variation 3: Tune a learner or experiment with pipelines
+
+The [learner section of the user guide](https://docs.doubleml.org/stable/guide/learners.html#r-learners-and-hyperparameters) explains how to perform parameter tuning using the [mlr3tuning](https://mlr3tuning.mlr-org.com/) package.
+
+It is also possible to implement pipelines using the [mlr3pipelines](https://mlr3pipelines.mlr-org.com/index.html) package. You can find an experimental notebook [here](https://docs.doubleml.org/dev/examples/R_double_ml_pipeline.html).
+
+______
+
+**Notes and Acknowledgement**
+
+We would like to thank the organizers of the [ACIC 2019 Data Challenge](https://sites.google.com/view/acic2019datachallenge/data-challenge) for setting up this data challenge and making the numerous synthetic data examples publicly available.  Although the data examples in the [ACIC 2019 Data Challenge](https://sites.google.com/view/acic2019datachallenge/data-challenge) do not explicitly adress A/B testing, we put the data example here in this context to give a tractable example on the use of causal machine learning in practice. The parameters for the random forests and extreme gradient boosting learners have been tuned externally. The corresponding tuning notebook will be uploaded in the [examples gallery](https://docs.doubleml.org/dev/examples/index.html) in the future.
+
+## References
+
+Chernozhukov, V., Chetverikov, D., Demirer, M., Duflo, E., Hansen, C., Newey, W. and Robins, J. (2018), Double/debiased machine learning for treatment and structural parameters. The Econometrics Journal, 21: C1-C68. doi:10.1111/ectj.12097.
+
