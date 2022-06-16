@@ -4,7 +4,7 @@ output: html_document
 ---
 
 
-<img src="figures/ab_testing.png" alt="An illustration of A/B testing." style="width: 400px;"/>
+<img src="figures/ab_testing.png" alt="An illustration of AB testing. A stylized browser window shows a double-headed rhino which is a variant of the DoubleML package logo. The screen is divided vertically in two parts. The left part of the screen has the tag 'A' and differs from the right part called 'B' in that the colors are inverted." style="width: 400px;"/>
 
 In this notebook, we demontrate exemplarily how the [DoubleML](https://docs.doubleml.org/stable/index.html) package can be used to estimate the causal effect of seeing a new ad design on customers' purchases in a webshop. We base the estimation steps of our analysis according to the [DoubleML workflow](https://docs.doubleml.org/stable/workflow/workflow.html).
 
