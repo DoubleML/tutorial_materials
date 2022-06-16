@@ -1,4 +1,4 @@
-# Tutorial Materiials: Causal machine learning with DoubleML
+# Tutorial Materials: Causal machine learning with DoubleML
 
 ## About this repository
 
@@ -6,7 +6,7 @@ In this repository, we share the materials used in the tutorial "*Causal machine
 
 ## Download
 
-To download this repo 
+To download this repo type
 
 ```bash
 git clone https://github.com/DoubleML/tutorial_materials_useR2022
