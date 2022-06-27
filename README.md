@@ -9,7 +9,7 @@ In this repository, we share the materials used in the tutorial "*Causal machine
 To download this repo type
 
 ```bash
-git clone https://github.com/DoubleML/tutorial_materials_useR2022
+git clone https://github.com/DoubleML/tutorial_materials
 
 ```
 
