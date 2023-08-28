@@ -51,7 +51,7 @@ lgr::get_logger("mlr3")$set_threshold("warn")
 
 ```{r}
 # Load example data set from URL
-url = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/master/doc/examples/data/orig_demand_data_example.csv'
+url = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/main/doc/examples/data/orig_demand_data_example.csv'
 data_example = fread(url)
 data_example
 ```
@@ -68,7 +68,6 @@ In the data we have,
 * `DoW`: Day of week
 * `stock_age_days`: Number of days product has been sold / observed in the data
 * `sku_avg_p`: Average (=median) price of the product
-* `2010-12-01`, ...: Date dummies
 * `Australia`, ...: Country dummies
 * `1`, `2`, ... : Numerical variables constructed to capture similarities in product descriptions (n-grams)
 * `dLnP`: Change in Price
@@ -78,9 +77,10 @@ Note that we do not include product dummies as the price and quantity variables 
 
 ```{r}
 # Load data set from URL
-url2 = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/master/doc/examples/data/elasticity_subset.csv'
+url2 = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/main/doc/examples/data/elasticity_subset.csv'
 demand_data = fread(url2)
 
+demand_data = demand_data[,2:ncol(demand_data)]
 # Replace column names by names that are conform to R
 names(demand_data) = make.names(names(demand_data), unique = TRUE)
 
@@ -101,7 +101,8 @@ head(demand_data[,1:10])
 To initiate the data backend, we create a new [DoubleMLData](https://docs.doubleml.org/stable/api/generated/doubleml.DoubleMLData.html#doubleml.DoubleMLData) object. During instantiation, we assign the roles of the variables, i.e., `dLnQ` as the dependent var, `dLnP` as the treatment variable and the remaining variables as confounders.
 
 ```{r}
-feature_names = names(demand_data)[5:(dim(demand_data)[2]-2)]
+feature_names = names(demand_data)[names(demand_data) !=
+                    c("Quantity", "revenue", "UnitPrice", "dLnP", "dLnQ")]
 ```
 
 ```{r}
