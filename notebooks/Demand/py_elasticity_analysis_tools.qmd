@@ -1,0 +1,247 @@
+---
+title: 'Python: Estimation of Price Elasticities with Double/Debiased Machine Learning'
+jupyter: python3
+format: html
+execute: 
+  eval: false
+  echo: true
+---
+
+![](figures/demand.png)
+
+In this example, we will demonstrate the use of the [DoubleML](https://docs.doubleml.org/stable/index.html) package in a real-data industry example: Estimation of price elasticity of demand. This notebook is based on a [blogpost by Lars Roemheld (Roemheld, 2021)](https://towardsdatascience.com/causal-inference-example-elasticity-de4a3e2e621b) with code and preprocessed data being available from [GitHub](https://github.com/larsroemheld/causalinf_ex_elasticity). The original data file is made available as a public domain (CC0 1.0 Universal) data set and shared on [kaggle](https://www.kaggle.com/vijayuv/onlineretail). It contains data on sales from an online retailer in the period of December 2010 until December 2011.
+
+The data preprocessing is performed in a [separate notebook that is available online](https://github.com/DoubleML/doubleml-docs/blob/master/doc/examples/py_elasticity_preprocessing.ipynb). To keep the computational effort at a moderate level, we will only use a subset of the data that is used in [Roemheld (2021)](https://towardsdatascience.com/causal-inference-example-elasticity-de4a3e2e621b). Our main goal is to illustrate the main steps of elasticity estimation with [DoubleML](https://docs.doubleml.org/stable/index.html).
+
+The following case study is organized according to the steps of the [DoubleML workflow](https://docs.doubleml.org/stable/workflow/workflow.html).
+
+## 0. Problem Formulation: Estimation of Price Elasticity of Demand
+
+"Supply" and "demand" are probably the very first terms that economics and business students hear in their studies. In industry, the price elasticity of demand is a very important quantity: It indicates how much the demand for a product (= the quantity sold by the firm) changes due to a change in its price. As a retailer, this quantity is of great interest because it makes it possible to increase revenues, and eventually profits, by optimally adjusting prices according to elasticities.
+
+
+The price elasticity of demand is formally defined as the relative change of the demanded quantity ($q$) of a product given a percent-change of the price ($p$)$$\theta_0 = \frac{\partial q/q}{\partial p/p}.$$
+
+In words, the parameter $\theta_0$ can be interpreted as follows: Provided the price for a product increases by $1\%$, the demanded quantity changes by $\theta_0\%$.
+
+In general, it would be possible to estimate $\theta_0$ based on an experiment or A/B test. However, this is not possible in our case as the data set only contains information on actual purchases in the period of consideration.
+
+The causal problem of price estimation based on an observational study is quite complex: It involves many (simultaneous) decisions made by the customers and the sellers. One approach for estimation of the causal parameter $\theta_0$ would be to account for confounding variables, that might have an effect to both the price and the quantity sold. The approach taken in  [Roemheld (2021)](https://towardsdatascience.com/causal-inference-example-elasticity-de4a3e2e621b) is to flexibly account for and construct confounding variables, for example including similarities in their product description or seasonal patterns, and thereby justifying identification of $\theta_0$.
+
+
+We can use a [partially linear regression](https://docs.doubleml.org/stable/guide/models.html#partially-linear-regression-model-plr) (PLR) model for estimation of $\theta_0$
+
+$$\log Q = \theta_0 \log P + g_0(X) + \zeta,$$
+
+with $\mathbb{E}(\zeta|D,X)=0$. The confounders can enter the regression equation nonlinearily via the function $g_0(X)$. In order to equip $\theta_0$ (approximately) with the interpretation of a price elasticity, we applied the $\log()$ to both the demanded quantity ($Q$) and the prices ($P$), i.e., we set up a $\log$-$\log$-regression.
+
+Before we proceed with the data analysis, it is important to mention a potential drawback to our analysis: The data only contains information on sales, not on stock days. Hence, based on this data set, it is not possible to assess what happened on days without sales (sales = 0). This drawback must be kept in mind when we draw causal conclusions from this analysis.
+
+## 1. Data-Backend
+
+To give an idea on the general setting we briefly load an exemplary data excerpt from the original data set. We can see that the data lists the transaction of a (online) retailer selling products like inflatable political globes or fancy pens.
+
+```{python}
+# Load required modules
+from sklearn import linear_model
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler
+from sklearn.feature_extraction.text import CountVectorizer
+import sklearn.preprocessing
+import pandas as pd, numpy as np
+from datetime import datetime, date
+from matplotlib import pyplot as plt
+import seaborn as sns
+import doubleml as dml
+from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LassoCV
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+import numpy as np
+```
+
+```{python}
+# Load example data set
+url = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/main/doc/examples/data/orig_demand_data_example.csv'
+data_example = pd.read_csv(url)
+data_example
+```
+
+In our analysis, we will use a preprocessed data set. Each row corresponds to the sales of a product at a specific date $t$.
+
+In the data we have, 
+
+* `Quantity`: Quantity demanded
+* `revenue`: Revenue
+* `UnitPrice`: Price per unit
+* `month`: Month
+* `DoM`: Day of month
+* `DoW`: Day of week
+* `stock_age_days`: Number of days product has been sold / observed in the data
+* `sku_avg_p`: Average (=median) price of the product
+* `Australia`, ...: Country dummies
+* `1`, `2`, ... : Numerical variables constructed to capture similarities in product descriptions (n-grams)
+* `dLnP`: Change in Price
+* `dLnQ`: Change in Quantity
+
+Note that we do not include product dummies as the price and quantity variables have been demeaned to account for product characteristics.
+
+```{python}
+url2 = 'https://raw.githubusercontent.com/DoubleML/doubleml-docs/main/doc/examples/data/elasticity_subset.csv'
+demand_data = pd.read_csv(url2, index_col = 0)
+print(demand_data.columns)
+```
+
+```{python}
+# Print dimensions of data set
+print(demand_data.shape)
+```
+
+```{python}
+# Glimpse at first rows of data set
+demand_data.head()
+```
+
+To initiate the data backend, we create a new [DoubleMLData](https://docs.doubleml.org/stable/api/generated/doubleml.DoubleMLData.html#doubleml.DoubleMLData) object. During instantiation, we assign the roles of the variables, i.e., `dLnQ` as the dependent var, `dLnP` as the treatment variable and the remaining variables as confounders.
+
+```{python}
+feature_names = demand_data.columns.drop(['Quantity', 'revenue', 'UnitPrice',
+                                      'dLnQ', 'dLnP']).to_list()
+
+```
+
+```{python}
+# TODO: Initialize the data backend
+```
+
+```{python}
+# TODO: Print the data backend
+```
+
+
+## 2. Causal Model 
+
+We already stated that a partially linear regression model in a $\log$-$\log$-specification will allow us to interpret the regression coefficient $\theta_0$ as the price elasticity of demand. We restate the main regression as well as the auxiliary regression that is required for orthogonality
+
+
+$$\begin{aligned}\log Q &= \theta_0 \log P + g_0(X) + \zeta,\\ \log P &= m_0(X) + V\end{aligned},$$
+
+with $\mathbb{E}(\zeta|D,X)=0$ and $\mathbb{E}(V|X)=0$. As stated above, we hope to justify the assumption $\mathbb{E}(\zeta|D,X)=0$ by sufficiently accounting for the confounding variables $X$.
+
+## 3. ML Methods
+
+We start with the linear regression model as a benchmark lerner for learning nuisance parameters $g_0(X)$ and $m_0(X)$. We additionally set up two models based on a lasso learner as well as a random forest learner and compare our results.
+
+
+```{python}
+ml_l_lin_reg = LinearRegression()
+ml_m_lin_reg = LinearRegression()
+```
+
+```{python}
+## TODO: Initialize a lasso learner
+
+```
+
+```{python}
+## TODO: Initialize a random forest learner
+```
+
+```{python}
+## TODO: Initialize a gradient boosting learner of your choice
+```
+
+## 4. DML Specifications
+
+For each learner configuration, we initialize a new [DoubleMLPLR](https://docs.doubleml.org/stable/api/generated/doubleml.DoubleMLPLR.html) object. We stick to the default options, i.e., `dml_procedure = 'dml2'`, `score = "partialling out"`, n_folds = 5. 
+
+```{python}
+np.random.seed(123)
+dml_plr_lin_reg = dml.DoubleMLPLR(data_dml,
+                                  ml_l = ml_l_lin_reg,
+                                  ml_m = ml_m_lin_reg)
+```
+
+```{python}
+# TODO: Initialize the DoubleML models for the other ML methods
+```
+
+
+## 5. Estimation 
+
+To estimate our target parameter $\theta_0$, we call the `fit()` method. The results can be summarized by accessing the `summary` field.
+
+```{python}
+## TODO: Fit and summarize the results from the different models
+```
+
+
+Let us now compare how well the three models approximate the nuisance functions $g_0(X)$ and $m_0(X)$. We can call the `evaluate_learners()` method. We can also visualize and compare the results in terms of the predictive performance.
+
+```{python}
+# TODO: Evaluate the predictive performance of the different learners
+```
+
+
+## 6. Inference
+
+We can visualize and summarize our findings so far. We can conclude that the price elasticity of demand, as indicated by the causal parameter $\theta_0$, is around $-1.8$. In all models, the coefficient is significantly different from zero.
+
+```{python}
+## TODO: Summarize the results so far
+```
+
+```{python}
+## TODO: Visualization of results
+```
+
+
+## 8. Sensitivity Analysis
+
+Let's run the sensitivity analysis with some benchmark scenarios. We focus on the one of the models now. For this, let's call `sensitivity_analysis()`.
+
+```{python}
+## TODO: Run the sensitivity analysis (with default values)
+```
+
+Now, let's visualize the results. What can we conclude from the contour plot?
+
+```{python}
+## TODO: Generate the contour plot 
+```
+
+Now, let's consider a benchmarking scenario. A smiple heuristic could be to use variable importance to gain an impression on important predictors of the outcome and treatment variables. For example, we could use `plot_importance` for `xgboost`.
+
+```{python}
+## TODO: Perform some variable importance analysis
+
+# Hint: use dml_plr_boost.models['ml_l']['dLnP'][0][0] to access the learners
+```
+
+Let us run a benchmark analysis for each of the three most important predictors variables for both `dLnQ` and `dLnP` to calibrate the sensitivity analysis.
+
+```{python}
+# TODO: Add the benchmarking variables to the sensitivity analysis
+```
+
+Let's summarize the results
+
+```{python}
+## TODO: Summary of benchmarking results
+```
+
+Now, let's add the benchmark scenarios to the contour plot.
+```{python}
+# TODO: Add benchmarking scenarios to the contour plot
+```
+
+How would you conclude the results from the sensitivity analysis?
+
+______
+
+**Acknowledgement**
+
+We would like to thank [Lars Roemheld](https://www.larsroemheld.com/) for setting up the blog post on demand estimation using double machine learning as well as for sharing the code and preprocessed data set. We hope that with this notebook, we illustrate how to run such an analysis using [DoubleML](https://docs.doubleml.org/stable/index.html). Moreover, we would like to thank [Anzony Quispe](https://github.com/anzonyquispe) for excellent assistance in creating this notebook.
+
